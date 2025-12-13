@@ -90,9 +90,18 @@ public sealed class WindowControlService : IDisposable
                 {
                     if (process.MainWindowHandle == IntPtr.Zero)
                         continue;
+                    var title = process.MainWindowTitle ?? string.Empty;
+                    
+                    // Check exclusion filter
+                    if (!string.IsNullOrWhiteSpace(rule.ExcludeTitleContains))
+                    {
+                        if (title.Contains(rule.ExcludeTitleContains, StringComparison.InvariantCultureIgnoreCase))
+                            continue;
+                    }
+                    
+                    // Check inclusion filter
                     if (!string.IsNullOrWhiteSpace(rule.MatchTitleContains))
                     {
-                        var title = process.MainWindowTitle ?? string.Empty;
                         if (!title.Contains(rule.MatchTitleContains, StringComparison.InvariantCultureIgnoreCase))
                             continue;
                     }
@@ -119,9 +128,18 @@ public sealed class WindowControlService : IDisposable
                 {
                     if (process.MainWindowHandle == IntPtr.Zero)
                         continue;
+                    var title = process.MainWindowTitle ?? string.Empty;
+                    
+                    // Check exclusion filter
+                    if (!string.IsNullOrWhiteSpace(rule.ExcludeTitleContains))
+                    {
+                        if (title.Contains(rule.ExcludeTitleContains, StringComparison.InvariantCultureIgnoreCase))
+                            continue;
+                    }
+                    
+                    // Check inclusion filter
                     if (!string.IsNullOrWhiteSpace(rule.MatchTitleContains))
                     {
-                        var title = process.MainWindowTitle ?? string.Empty;
                         if (!title.Contains(rule.MatchTitleContains, StringComparison.InvariantCultureIgnoreCase))
                             continue;
                     }
@@ -190,6 +208,17 @@ public sealed class WindowControlService : IDisposable
                             continue;
                         }
 
+                        // Check exclusion filter first - if title matches exclusion, skip this window
+                        if (!string.IsNullOrWhiteSpace(rule.ExcludeTitleContains))
+                        {
+                            if (title.Contains(rule.ExcludeTitleContains, StringComparison.InvariantCultureIgnoreCase))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Skipping window matching exclusion pattern for {process.ProcessName} (PID {process.Id}): '{title}' matches '{rule.ExcludeTitleContains}'");
+                                continue;
+                            }
+                        }
+
+                        // Check inclusion filter - if specified, only process windows that match
                         if (!string.IsNullOrWhiteSpace(rule.MatchTitleContains))
                         {
                             if (!title.Contains(rule.MatchTitleContains, StringComparison.InvariantCultureIgnoreCase))
@@ -455,7 +484,8 @@ public sealed class WindowControlService : IDisposable
         public int Y { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
-        public string? MatchTitleContains { get; set; }
+        public string? MatchTitleContains { get; set; } // Include only windows with title containing this
+        public string? ExcludeTitleContains { get; set; } // Exclude windows with title containing this
         public bool Enabled { get; set; } = true;
         public bool ApplyOnStartup { get; set; } = true;
         public bool? OnTop { get; set; } = null; // null = don't change, true = set on top, false = remove from top

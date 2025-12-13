@@ -39,6 +39,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Text="Corners" VerticalAlignment="Center"/>
@@ -57,37 +58,40 @@
 
                 <TextBlock Grid.Row="1" Text="Title Contains" Grid.Column="2" VerticalAlignment="Center"/>
                 <TextBox Grid.Row="1" x:Name="TitleContainsInput" Grid.Column="3" Margin="8,6,0,6"/>
+                
+                <TextBlock Grid.Row="2" Text="Exclude Title" Grid.Column="2" VerticalAlignment="Center"/>
+                <TextBox Grid.Row="2" x:Name="ExcludeTitleContainsInput" Grid.Column="3" Margin="8,6,0,6"/>
 
-                <TextBlock Grid.Row="2" Text="X" VerticalAlignment="Center"/>
-                <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="8,6,16,6">
+                <TextBlock Grid.Row="3" Text="X" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="8,6,16,6">
                     <TextBox x:Name="XInput" Width="80"/>
                     <Button Content="⟸" Width="28" Margin="6,0,0,0" ToolTip="Snap Left" Click="PresetSnapLeft_Click"/>
                     <Button Content="⟹" Width="28" Margin="6,0,0,0" ToolTip="Snap Right" Click="PresetSnapRight_Click"/>
                 </StackPanel>
 
-                <TextBlock Grid.Row="2" Grid.Column="2" Text="Y" VerticalAlignment="Center"/>
-                <StackPanel Grid.Row="2" Grid.Column="3" Orientation="Horizontal" Margin="8,6,0,6">
+                <TextBlock Grid.Row="3" Grid.Column="2" Text="Y" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="3" Grid.Column="3" Orientation="Horizontal" Margin="8,6,0,6">
                     <TextBox x:Name="YInput" Width="80"/>
                     <Button Content="⟸" Width="28" Margin="6,0,0,0" ToolTip="Snap Top" Click="PresetSnapTop_Click"/>
                     <Button Content="⟹" Width="28" Margin="6,0,0,0" ToolTip="Snap Bottom" Click="PresetSnapBottom_Click"/>
                 </StackPanel>
 
-                <TextBlock Grid.Row="3" Text="Width" VerticalAlignment="Center"/>
-                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="8,6,16,6">
+                <TextBlock Grid.Row="4" Text="Width" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="8,6,16,6">
                     <TextBox x:Name="WidthInput" Width="80"/>
                     <Button Content="1/2" Width="40" Margin="6,0,0,0" Click="PresetHalfWidth_Click"/>
                     <Button Content="Full" Width="50" Margin="6,0,0,0" Click="PresetFullWidth_Click"/>
                 </StackPanel>
 
-                <TextBlock Grid.Row="3" Grid.Column="2" Text="Height" VerticalAlignment="Center"/>
-                <StackPanel Grid.Row="3" Grid.Column="3" Orientation="Horizontal" Margin="8,6,0,6">
+                <TextBlock Grid.Row="4" Grid.Column="2" Text="Height" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="4" Grid.Column="3" Orientation="Horizontal" Margin="8,6,0,6">
                     <TextBox x:Name="HeightInput" Width="80"/>
                     <Button Content="1/2" Width="40" Margin="6,0,0,0" Click="PresetHalfHeight_Click"/>
                     <Button Content="Full" Width="50" Margin="6,0,0,0" Click="PresetFullHeight_Click"/>
                 </StackPanel>
 
-                <TextBlock Grid.Row="4" Text="On Top" VerticalAlignment="Center"/>
-                <ComboBox Grid.Row="4" Grid.Column="1" x:Name="OnTopInput" Width="80" Margin="8,6,16,6" SelectedValuePath="Tag">
+                <TextBlock Grid.Row="5" Text="On Top" VerticalAlignment="Center"/>
+                <ComboBox Grid.Row="5" Grid.Column="1" x:Name="OnTopInput" Width="80" Margin="8,6,16,6" SelectedValuePath="Tag">
                     <ComboBoxItem Content="-" Tag="{x:Null}"/>
                     <ComboBoxItem Content="Yes" Tag="True"/>
                     <ComboBoxItem Content="No" Tag="False"/>
@@ -99,6 +103,7 @@
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="*"/>
                 <DataGridTextColumn Header="Title Contains" Binding="{Binding MatchTitleContains}" Width="*"/>
+                <DataGridTextColumn Header="Exclude Title" Binding="{Binding ExcludeTitleContains}" Width="*"/>
                 <DataGridTextColumn Header="X" Binding="{Binding X}" Width="60"/>
                 <DataGridTextColumn Header="Y" Binding="{Binding Y}" Width="60"/>
                 <DataGridTextColumn Header="Width" Binding="{Binding Width}" Width="70"/>

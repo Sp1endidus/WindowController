@@ -130,6 +130,7 @@ public partial class MainWindow : Window
 
         var process = (ProcessNameInput.Text ?? string.Empty).Trim();
         var title = (TitleContainsInput.Text ?? string.Empty).Trim();
+        var excludeTitle = (ExcludeTitleContainsInput.Text ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(process))
         {
             StatusText.Text = "Process name required";
@@ -142,7 +143,7 @@ public partial class MainWindow : Window
         var existing = _rules.FirstOrDefault(r => string.Equals(r.ProcessName, process, StringComparison.InvariantCultureIgnoreCase) && string.Equals(r.MatchTitleContains ?? string.Empty, title, StringComparison.InvariantCultureIgnoreCase));
         if (existing != null)
         {
-            existing.X = x; existing.Y = y; existing.Width = w; existing.Height = h; existing.Enabled = true; existing.OnTop = onTopValue;
+            existing.X = x; existing.Y = y; existing.Width = w; existing.Height = h; existing.Enabled = true; existing.OnTop = onTopValue; existing.ExcludeTitleContains = string.IsNullOrEmpty(excludeTitle) ? null : excludeTitle;
             RulesGrid.Items.Refresh();
             StatusText.Text = "Rule updated";
         }
@@ -152,6 +153,7 @@ public partial class MainWindow : Window
             {
                 ProcessName = process,
                 MatchTitleContains = string.IsNullOrEmpty(title) ? null : title,
+                ExcludeTitleContains = string.IsNullOrEmpty(excludeTitle) ? null : excludeTitle,
                 X = x,
                 Y = y,
                 Width = w,
@@ -169,6 +171,7 @@ public partial class MainWindow : Window
         {
             ProcessNameInput.Text = rule.ProcessName;
             TitleContainsInput.Text = rule.MatchTitleContains ?? string.Empty;
+            ExcludeTitleContainsInput.Text = rule.ExcludeTitleContains ?? string.Empty;
             XInput.Text = rule.X.ToString();
             YInput.Text = rule.Y.ToString();
             WidthInput.Text = rule.Width.ToString();
@@ -202,6 +205,7 @@ public partial class MainWindow : Window
             {
                 ProcessName = r.ProcessName,
                 MatchTitleContains = r.MatchTitleContains,
+                ExcludeTitleContains = r.ExcludeTitleContains,
                 X = r.X,
                 Y = r.Y,
                 Width = r.Width,
