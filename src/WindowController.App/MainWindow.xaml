@@ -1,0 +1,149 @@
+﻿<Window x:Class="WindowController.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:WindowController.App"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
+        mc:Ignorable="d"
+        Title="Window Controller" Height="600" Width="1000">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Controls external windows based on rules in windowrules.json" TextWrapping="Wrap"/>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+            <TextBlock VerticalAlignment="Center">
+                <Run Text="Config:"/>
+                <Run x:Name="ConfigPathText"/>
+            </TextBlock>
+        </StackPanel>
+
+        <GroupBox Grid.Row="2" Header="New / Edit Rule" Margin="0,12,0,0">
+            <Grid Margin="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="Corners" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="8,0,16,0">
+                    <Button Content="↖" Width="28" Click="PresetTopLeft_Click"/>
+                    <Button Content="↗" Width="28" Margin="6,0,0,0" Click="PresetTopRight_Click"/>
+                    <Button Content="↙" Width="28" Margin="6,0,0,0" Click="PresetBottomLeft_Click"/>
+                    <Button Content="↘" Width="28" Margin="6,0,0,0" Click="PresetBottomRight_Click"/>
+                </StackPanel>
+
+                <TextBlock Grid.Row="1" Text="Process" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="8,6,16,6">
+                    <TextBox x:Name="ProcessNameInput" Width="180"/>
+                    <Button x:Name="PickWindowButton" Content="Pick Window" Margin="8,0,0,0" Click="PickWindowButton_Click"/>
+                </StackPanel>
+
+                <TextBlock Grid.Row="1" Text="Title Contains" Grid.Column="2" VerticalAlignment="Center"/>
+                <TextBox Grid.Row="1" x:Name="TitleContainsInput" Grid.Column="3" Margin="8,6,0,6"/>
+
+                <TextBlock Grid.Row="2" Text="X" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="8,6,16,6">
+                    <TextBox x:Name="XInput" Width="80"/>
+                    <Button Content="⟸" Width="28" Margin="6,0,0,0" ToolTip="Snap Left" Click="PresetSnapLeft_Click"/>
+                    <Button Content="⟹" Width="28" Margin="6,0,0,0" ToolTip="Snap Right" Click="PresetSnapRight_Click"/>
+                </StackPanel>
+
+                <TextBlock Grid.Row="2" Grid.Column="2" Text="Y" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="2" Grid.Column="3" Orientation="Horizontal" Margin="8,6,0,6">
+                    <TextBox x:Name="YInput" Width="80"/>
+                    <Button Content="⟸" Width="28" Margin="6,0,0,0" ToolTip="Snap Top" Click="PresetSnapTop_Click"/>
+                    <Button Content="⟹" Width="28" Margin="6,0,0,0" ToolTip="Snap Bottom" Click="PresetSnapBottom_Click"/>
+                </StackPanel>
+
+                <TextBlock Grid.Row="3" Text="Width" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="8,6,16,6">
+                    <TextBox x:Name="WidthInput" Width="80"/>
+                    <Button Content="1/2" Width="40" Margin="6,0,0,0" Click="PresetHalfWidth_Click"/>
+                    <Button Content="Full" Width="50" Margin="6,0,0,0" Click="PresetFullWidth_Click"/>
+                </StackPanel>
+
+                <TextBlock Grid.Row="3" Grid.Column="2" Text="Height" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="3" Grid.Column="3" Orientation="Horizontal" Margin="8,6,0,6">
+                    <TextBox x:Name="HeightInput" Width="80"/>
+                    <Button Content="1/2" Width="40" Margin="6,0,0,0" Click="PresetHalfHeight_Click"/>
+                    <Button Content="Full" Width="50" Margin="6,0,0,0" Click="PresetFullHeight_Click"/>
+                </StackPanel>
+
+                <TextBlock Grid.Row="4" Text="On Top" VerticalAlignment="Center"/>
+                <ComboBox Grid.Row="4" Grid.Column="1" x:Name="OnTopInput" Width="80" Margin="8,6,16,6" SelectedValuePath="Tag">
+                    <ComboBoxItem Content="-" Tag="{x:Null}"/>
+                    <ComboBoxItem Content="Yes" Tag="True"/>
+                    <ComboBoxItem Content="No" Tag="False"/>
+                </ComboBox>
+            </Grid>
+        </GroupBox>
+
+        <DataGrid Grid.Row="3" x:Name="RulesGrid" AutoGenerateColumns="False" CanUserAddRows="False" Margin="0,12,0,0">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="*"/>
+                <DataGridTextColumn Header="Title Contains" Binding="{Binding MatchTitleContains}" Width="*"/>
+                <DataGridTextColumn Header="X" Binding="{Binding X}" Width="60"/>
+                <DataGridTextColumn Header="Y" Binding="{Binding Y}" Width="60"/>
+                <DataGridTextColumn Header="Width" Binding="{Binding Width}" Width="70"/>
+                <DataGridTextColumn Header="Height" Binding="{Binding Height}" Width="70"/>
+                <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="70"/>
+                <DataGridCheckBoxColumn Header="On Startup" Binding="{Binding ApplyOnStartup}" Width="90"/>
+                <DataGridTemplateColumn Header="On Top" Width="80">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ComboBox SelectedValue="{Binding OnTop, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Tag" Width="70">
+                                <ComboBoxItem Content="-" Tag="{x:Null}"/>
+                                <ComboBoxItem Content="Yes" Tag="True"/>
+                                <ComboBoxItem Content="No" Tag="False"/>
+                            </ComboBox>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="Actions" Width="Auto">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Edit" Margin="0,0,6,0" Click="EditRule_Click"/>
+                                <Button Content="Delete" Click="DeleteRule_Click"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,12,0,0" HorizontalAlignment="Left">
+            <CheckBox x:Name="ApplyAllOnStartupInput" Content="Apply All On Startup" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <CheckBox x:Name="StartInTrayInput" Content="Start In Tray" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <Button x:Name="AddOrUpdateButton" Content="Add / Update Rule" Width="140" Click="AddOrUpdateButton_Click"/>
+            <Button x:Name="SaveButton" Content="Save Rules" Width="120" Margin="8,0,0,0" Click="SaveButton_Click"/>
+            <Button x:Name="ReloadButton" Content="Reload Rules" Width="120" Margin="8,0,0,0" Click="ReloadButton_Click"/>
+            <Button x:Name="ApplyNowButton" Content="Apply Now (5s)" Width="130" Margin="8,0,0,0" Click="ApplyNowButton_Click"/>
+            <Button x:Name="HideToTrayButton" Content="Hide To Tray" Width="120" Margin="8,0,0,0" Click="HideToTrayButton_Click"/>
+            
+        </StackPanel>
+
+        <StatusBar Grid.Row="5" Margin="-8,12,-8,0" Visibility="Collapsed">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusText" Text="Idle"/>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>

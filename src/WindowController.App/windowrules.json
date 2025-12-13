@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "processName": "notepad",
+      "x": 120,
+      "y": 120,
+      "width": 200,
+      "height": 200,
+      "matchTitleContains": "",
+      "enabled": true,
+      "applyOnStartup": true,
+      "onTop": null
+    }
+  ],
+  "pollIntervalMs": 1500,
+  "applyOnLaunchOnly": false,
+  "controlDurationMs": 5000,
+  "applyAllOnStartup": false,
+  "startInTray": false
+}
+
+
