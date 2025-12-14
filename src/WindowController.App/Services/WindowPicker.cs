@@ -1,13 +1,14 @@
-using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Threading.Tasks;
+using System.Text;
 
 namespace WindowController.App.Services;
 
 public static class WindowPicker
 {
     private const int VK_LBUTTON = 0x01;
+
+    private const uint GA_ROOT = 2;
 
     public static bool TryPickWindow(out PickedWindow? picked)
     {
@@ -32,7 +33,9 @@ public static class WindowPicker
             var proc = Process.GetProcessById((int)pid);
             processName = proc.ProcessName;
         }
-        catch { }
+        catch
+        {
+        }
 
         var title = GetWindowText(hwnd);
 
@@ -52,11 +55,11 @@ public static class WindowPicker
     public static async Task<PickedWindow?> PickOnNextClickAsync(TimeSpan timeout, int ownProcessId)
     {
         var start = DateTime.UtcNow;
-        bool wasDown = false;
+        var wasDown = false;
         while ((DateTime.UtcNow - start) < timeout)
         {
-            short state = GetAsyncKeyState(VK_LBUTTON);
-            bool isDown = (state & 0x8000) != 0;
+            var state = GetAsyncKeyState(VK_LBUTTON);
+            var isDown = (state & 0x8000) != 0;
             if (isDown && !wasDown)
             {
                 // on edge from up->down, capture
@@ -72,8 +75,15 @@ public static class WindowPicker
                         {
                             if (GetWindowRect(hwnd, out var rect))
                             {
-                                string processName = string.Empty;
-                                try { processName = Process.GetProcessById((int)pid).ProcessName; } catch { }
+                                var processName = string.Empty;
+                                try
+                                {
+                                    processName = Process.GetProcessById((int)pid).ProcessName;
+                                }
+                                catch
+                                {
+                                }
+
                                 var title = GetWindowText(hwnd);
                                 return new PickedWindow
                                 {
@@ -90,9 +100,11 @@ public static class WindowPicker
                     }
                 }
             }
+
             wasDown = isDown;
             await Task.Delay(25).ConfigureAwait(false);
         }
+
         return null;
     }
 
@@ -100,18 +112,10 @@ public static class WindowPicker
     {
         int len = GetWindowTextLength(hWnd);
         if (len <= 0) return string.Empty;
-        var buffer = new System.Text.StringBuilder(len + 1);
+        var buffer = new StringBuilder(len + 1);
         _ = GetWindowText(hWnd, buffer, buffer.Capacity);
         return buffer.ToString();
     }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT { public int X; public int Y; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-
-    private const uint GA_ROOT = 2;
 
     [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out POINT lpPoint);
@@ -126,7 +130,7 @@ public static class WindowPicker
     private static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
 
     [DllImport("user32.dll")]
-    private static extern int GetWindowText(nint hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+    private static extern int GetWindowText(nint hWnd, StringBuilder lpString, int nMaxCount);
 
     [DllImport("user32.dll")]
     private static extern int GetWindowTextLength(nint hWnd);
@@ -136,6 +140,22 @@ public static class WindowPicker
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 }
 
 public sealed class PickedWindow
@@ -148,5 +168,3 @@ public sealed class PickedWindow
     public int Width { get; set; }
     public int Height { get; set; }
 }
-
-
