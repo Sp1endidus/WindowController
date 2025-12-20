@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace WindowController.App.Services;
 
@@ -171,7 +172,7 @@ public sealed class WindowControlService : IDisposable
                     // Check exclusion filter
                     if (!string.IsNullOrWhiteSpace(rule.ExcludeTitleContains))
                     {
-                        if (title.Contains(rule.ExcludeTitleContains, StringComparison.InvariantCultureIgnoreCase))
+                        if (rule.ExcludeTitles.Contains(title))
                             continue;
                     }
 
@@ -256,7 +257,7 @@ public sealed class WindowControlService : IDisposable
                         // Check exclusion filter first - if title matches exclusion, skip this window
                         if (!string.IsNullOrWhiteSpace(rule.ExcludeTitleContains))
                         {
-                            if (title.Contains(rule.ExcludeTitleContains, StringComparison.InvariantCultureIgnoreCase))
+                            if (rule.ExcludeTitles.Contains(title))
                             {
                                 Debug.WriteLine(
                                     $"Skipping window matching exclusion pattern for {process.ProcessName} (PID {process.Id}): '{title}' matches '{rule.ExcludeTitleContains}'");
@@ -808,6 +809,21 @@ public sealed class WindowControlService : IDisposable
         public int Height { get; set; }
         public string? MatchTitleContains { get; set; } // Include only windows with title containing this
         public string? ExcludeTitleContains { get; set; } // Exclude windows with title containing this
+        [JsonIgnore]
+        private string[] _excludeTitles;
+        [JsonIgnore]
+        public string[] ExcludeTitles
+        {
+            get
+            {
+                if (_excludeTitles == null)
+                {
+                    _excludeTitles = ExcludeTitleContains?.Split(';');
+                }
+
+                return _excludeTitles;
+            }
+        }
         public bool Enabled { get; set; } = true;
         public bool ApplyOnStartup { get; set; } = true;
         public bool? OnTop { get; set; } = null; // null = don't change, true = set on top, false = remove from top
