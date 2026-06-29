@@ -9,51 +9,27 @@ namespace WindowController.App.Services;
 
 public sealed class WindowControlService : IDisposable
 {
-    private const int SW_RESTORE = 9;
-    private const uint SWP_NOMOVE = 0x0002;
-    private const uint SWP_NOSIZE = 0x0001;
-    private const uint SWP_SHOWWINDOW = 0x0040;
-    private const uint SWP_NOZORDER = 0x0004;
-    private const uint SWP_FRAMECHANGED = 0x0020;
-
-    private const uint WM_SIZE = 0x0005;
-    private const uint WM_MOVE = 0x0003;
-    private const uint SIZE_RESTORED = 0;
-    private const int SW_SHOWNORMAL = 1;
-
     private const int GWL_STYLE = -16;
-    private const int GWL_EXSTYLE = -20;
-
-    // Window style flags
-    private const int WS_THICKFRAME = 0x00040000;
-    private const int WS_SIZEBOX = 0x00040000; // Same as WS_THICKFRAME
-    private const int WS_MAXIMIZEBOX = 0x00010000;
-    private const int WS_MINIMIZEBOX = 0x00020000;
-    private const int WS_SYSMENU = 0x00080000;
-    private const int WS_OVERLAPPED = 0x00000000;
-
-    private const int WS_OVERLAPPEDWINDOW =
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
-
-    private const int WS_CAPTION = 0x00C00000;
-    private const int WS_BORDER = 0x00800000;
     private const uint WS_POPUP = 0x80000000;
     private const int WS_CHILD = 0x40000000;
 
     private const uint GW_OWNER = 4;
-    private static readonly nint HWND_TOPMOST = new nint(-1);
-    private static readonly nint HWND_NOTOPMOST = new nint(-2);
     private readonly object _configLock = new();
+    private readonly object _stateLock = new();
     private readonly Dictionary<int, DateTime> _firstSeenByPid = new();
     private readonly Dictionary<int, bool> _lastMinimizedByPid = new();
     private readonly Dictionary<int, bool> _lastVisibilityByPid = new();
     private readonly Dictionary<int, nint> _lastWindowHandleByPid = new();
+    private readonly HashSet<int> _suppressedWhileMinimizedByPid = new();
+    private readonly WindowRuleApplier _windowRuleApplier;
     private WindowRulesConfig _config;
     private CancellationTokenSource? _cts;
+    private Task? _monitorTask;
 
-    public WindowControlService(string configPath)
+    public WindowControlService(string configPath, WindowRuleApplier? windowRuleApplier = null)
     {
         ConfigPath = configPath;
+        _windowRuleApplier = windowRuleApplier ?? new WindowRuleApplier();
         _config = LoadConfigInternal(configPath);
     }
 
@@ -68,7 +44,7 @@ public sealed class WindowControlService : IDisposable
     {
         lock (_configLock)
         {
-            return _config;
+            return _config.Clone();
         }
     }
 
@@ -79,19 +55,24 @@ public sealed class WindowControlService : IDisposable
         {
             _config = cfg;
         }
+
+        SimulateAppJustOpenedForAll();
     }
 
     public void Save(WindowRulesConfig config)
     {
-        var json = JsonSerializer.Serialize(config, new JsonSerializerOptions
+        var snapshot = config.Clone();
+        var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions
         {
             WriteIndented = true
         });
         File.WriteAllText(ConfigPath, json);
         lock (_configLock)
         {
-            _config = config;
+            _config = snapshot;
         }
+
+        SimulateAppJustOpenedForAll();
     }
 
     public void Start()
@@ -99,13 +80,29 @@ public sealed class WindowControlService : IDisposable
         if (_cts != null) return;
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
-        Task.Run(() => MonitorLoopAsync(token), token);
+        _monitorTask = Task.Run(() => MonitorLoopAsync(token), token);
     }
 
     public void Stop()
     {
-        _cts?.Cancel();
+        var cts = _cts;
+        var monitorTask = _monitorTask;
+        cts?.Cancel();
         _cts = null;
+        _monitorTask = null;
+
+        if (monitorTask is { IsCompleted: false })
+        {
+            try
+            {
+                monitorTask.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch (AggregateException ex) when (ex.InnerExceptions.All(e => e is TaskCanceledException))
+            {
+            }
+        }
+
+        cts?.Dispose();
     }
 
     public void ApplyStartupRulesOnce()
@@ -113,7 +110,7 @@ public sealed class WindowControlService : IDisposable
         WindowRulesConfig snapshot;
         lock (_configLock)
         {
-            snapshot = _config;
+            snapshot = _config.Clone();
         }
 
         foreach (var rule in snapshot.Rules.Where(r => r.Enabled && r.ApplyOnStartup))
@@ -127,21 +124,10 @@ public sealed class WindowControlService : IDisposable
                         continue;
                     var title = process.MainWindowTitle ?? string.Empty;
 
-                    // Check exclusion filter
-                    if (!string.IsNullOrWhiteSpace(rule.ExcludeTitleContains))
-                    {
-                        if (title.Contains(rule.ExcludeTitleContains, StringComparison.InvariantCultureIgnoreCase))
-                            continue;
-                    }
+                    if (!ShouldApplyToTitle(rule, title))
+                        continue;
 
-                    // Check inclusion filter
-                    if (!string.IsNullOrWhiteSpace(rule.MatchTitleContains))
-                    {
-                        if (!title.Contains(rule.MatchTitleContains, StringComparison.InvariantCultureIgnoreCase))
-                            continue;
-                    }
-
-                    ApplyRuleToWindow(process.MainWindowHandle, rule);
+                    _windowRuleApplier.Apply(process.MainWindowHandle, rule);
                 }
             }
             catch
@@ -155,7 +141,7 @@ public sealed class WindowControlService : IDisposable
         WindowRulesConfig snapshot;
         lock (_configLock)
         {
-            snapshot = _config;
+            snapshot = _config.Clone();
         }
 
         foreach (var rule in snapshot.Rules.Where(r => r.Enabled))
@@ -169,21 +155,10 @@ public sealed class WindowControlService : IDisposable
                         continue;
                     var title = process.MainWindowTitle;
 
-                    // Check exclusion filter
-                    if (!string.IsNullOrWhiteSpace(rule.ExcludeTitleContains))
-                    {
-                        if (rule.ExcludeTitles.Contains(title))
-                            continue;
-                    }
+                    if (!ShouldApplyToTitle(rule, title))
+                        continue;
 
-                    // Check inclusion filter
-                    if (!string.IsNullOrWhiteSpace(rule.MatchTitleContains))
-                    {
-                        if (!title.Contains(rule.MatchTitleContains, StringComparison.InvariantCultureIgnoreCase))
-                            continue;
-                    }
-
-                    ApplyRuleToWindow(process.MainWindowHandle, rule);
+                    _windowRuleApplier.Apply(process.MainWindowHandle, rule);
                 }
             }
             catch (Exception e)
@@ -202,7 +177,7 @@ public sealed class WindowControlService : IDisposable
             WindowRulesConfig snapshot;
             lock (_configLock)
             {
-                snapshot = _config;
+                snapshot = _config.Clone();
             }
 
             var currentIterationPids = new HashSet<int>();
@@ -218,8 +193,10 @@ public sealed class WindowControlService : IDisposable
 
                         if (process.MainWindowHandle == IntPtr.Zero)
                         {
-                            // Window handle is zero - track this state
-                            _lastWindowHandleByPid[process.Id] = IntPtr.Zero;
+                            lock (_stateLock)
+                            {
+                                _lastWindowHandleByPid[process.Id] = IntPtr.Zero;
+                            }
                             continue;
                         }
 
@@ -233,7 +210,19 @@ public sealed class WindowControlService : IDisposable
                         }
 
                         // Check if window handle reappeared (was zero, now non-zero) or changed (different handle for same PID)
-                        var lastHandle = _lastWindowHandleByPid.TryGetValue(process.Id, out var h) ? h : IntPtr.Zero;
+                        nint lastHandle;
+                        bool wasMinimized;
+                        bool wasVisible;
+                        bool wasPreviouslyTracked;
+                        bool isSuppressedWhileMinimized;
+                        lock (_stateLock)
+                        {
+                            lastHandle = _lastWindowHandleByPid.TryGetValue(process.Id, out var h) ? h : IntPtr.Zero;
+                            wasMinimized = _lastMinimizedByPid.GetValueOrDefault(process.Id, false);
+                            wasVisible = _lastVisibilityByPid.GetValueOrDefault(process.Id, false);
+                            wasPreviouslyTracked = _lastWindowHandleByPid.ContainsKey(process.Id);
+                            isSuppressedWhileMinimized = _suppressedWhileMinimizedByPid.Contains(process.Id);
+                        }
                         var handleReappeared = lastHandle == IntPtr.Zero && process.MainWindowHandle != IntPtr.Zero;
                         // Only treat as handle change if the new handle is not a popup (already checked above)
                         var handleChanged = lastHandle != IntPtr.Zero && lastHandle != process.MainWindowHandle &&
@@ -254,43 +243,64 @@ public sealed class WindowControlService : IDisposable
                             continue;
                         }
 
-                        // Check exclusion filter first - if title matches exclusion, skip this window
-                        if (!string.IsNullOrWhiteSpace(rule.ExcludeTitleContains))
-                        {
-                            if (rule.ExcludeTitles.Contains(title))
-                            {
-                                Debug.WriteLine(
-                                    $"Skipping window matching exclusion pattern for {process.ProcessName} (PID {process.Id}): '{title}' matches '{rule.ExcludeTitleContains}'");
-                                continue;
-                            }
-                        }
-
-                        // Check inclusion filter - if specified, only process windows that match
-                        if (!string.IsNullOrWhiteSpace(rule.MatchTitleContains))
-                        {
-                            if (!title.Contains(rule.MatchTitleContains, StringComparison.InvariantCultureIgnoreCase))
-                                continue;
-                        }
+                        if (!ShouldApplyToTitle(rule, title))
+                            continue;
 
                         // Check if window is visible (not minimized/hidden)
                         var isMinimized = IsIconic(process.MainWindowHandle);
                         var isVisible = IsWindowVisible(process.MainWindowHandle) && !isMinimized;
 
                         // Check if window was minimized before and is now restored
-                        var wasMinimized = _lastMinimizedByPid.GetValueOrDefault(process.Id, false);
                         var wasRestored = wasMinimized && !isMinimized;
 
                         // Check if window is being minimized (transitioning from visible to minimized)
-                        var wasVisible = _lastVisibilityByPid.GetValueOrDefault(process.Id, false);
                         var isBeingMinimized = wasVisible && !isVisible && isMinimized;
 
                         // Check if visibility changed from hidden to visible
                         // Default to false for first-time detection (assume window wasn't visible before we started tracking)
                         var becameVisible = !wasVisible && isVisible;
 
+                        if (isBeingMinimized)
+                        {
+                            lock (_stateLock)
+                            {
+                                _suppressedWhileMinimizedByPid.Add(process.Id);
+                                _lastVisibilityByPid[process.Id] = isVisible;
+                                _lastMinimizedByPid[process.Id] = isMinimized;
+                                _lastWindowHandleByPid[process.Id] = process.MainWindowHandle;
+                            }
+
+                            Debug.WriteLine(
+                                $"Suppressing auto-restore after manual minimize for {process.ProcessName} (PID {process.Id})");
+                            appliedForPid.Remove(process.Id);
+                            continue;
+                        }
+
+                        if (isSuppressedWhileMinimized)
+                        {
+                            if (isMinimized)
+                            {
+                                lock (_stateLock)
+                                {
+                                    _lastVisibilityByPid[process.Id] = isVisible;
+                                    _lastMinimizedByPid[process.Id] = isMinimized;
+                                    _lastWindowHandleByPid[process.Id] = process.MainWindowHandle;
+                                }
+
+                                continue;
+                            }
+
+                            if (wasRestored || becameVisible)
+                            {
+                                lock (_stateLock)
+                                {
+                                    _suppressedWhileMinimizedByPid.Remove(process.Id);
+                                }
+                            }
+                        }
+
                         // Window became visible if process reappeared, handle reappeared, handle changed, was restored from minimized state, OR if visibility changed
                         // Note: Only treat processReappeared as restore if we had previously tracked this PID (to avoid treating first-time detection as restore)
-                        var wasPreviouslyTracked = _lastWindowHandleByPid.ContainsKey(process.Id);
                         var shouldApply = (processReappeared && wasPreviouslyTracked) || handleReappeared ||
                                           handleChanged || becameVisible || wasRestored;
 
@@ -309,18 +319,24 @@ public sealed class WindowControlService : IDisposable
 
                         // Enforce only for the first ControlDurationMs since first detection OR when simulating launch
                         // Also reset timer if window becomes visible after being hidden or is restored
-                        if (!_firstSeenByPid.TryGetValue(process.Id, out var first) || shouldApply)
+                        DateTime first;
+                        lock (_stateLock)
                         {
-                            first = DateTime.UtcNow;
-                            _firstSeenByPid[process.Id] = first;
-                            Debug.WriteLine(
-                                $"Reset timer for {process.ProcessName} - first time, became visible, or was restored");
+                            if (!_firstSeenByPid.TryGetValue(process.Id, out first) || shouldApply)
+                            {
+                                first = DateTime.UtcNow;
+                                _firstSeenByPid[process.Id] = first;
+                                Debug.WriteLine(
+                                    $"Reset timer for {process.ProcessName} - first time, became visible, or was restored");
+                            }
                         }
 
-                        // Update visibility, minimized state, and window handle tracking
-                        _lastVisibilityByPid[process.Id] = isVisible;
-                        _lastMinimizedByPid[process.Id] = isMinimized;
-                        _lastWindowHandleByPid[process.Id] = process.MainWindowHandle;
+                        lock (_stateLock)
+                        {
+                            _lastVisibilityByPid[process.Id] = isVisible;
+                            _lastMinimizedByPid[process.Id] = isMinimized;
+                            _lastWindowHandleByPid[process.Id] = process.MainWindowHandle;
+                        }
 
                         var elapsed = DateTime.UtcNow - first;
 
@@ -363,18 +379,18 @@ public sealed class WindowControlService : IDisposable
                                 _ = Task.Run(() =>
                                 {
                                     Thread.Sleep(10); // Minimal delay
-                                    ApplyRuleToWindow(process.MainWindowHandle, rule);
+                                    _windowRuleApplier.Apply(process.MainWindowHandle, rule);
                                     // Apply again after a short delay to ensure it sticks
                                     Thread.Sleep(200);
-                                    ApplyRuleToWindow(process.MainWindowHandle, rule);
+                                    _windowRuleApplier.Apply(process.MainWindowHandle, rule);
                                     // Apply one more time after a longer delay to catch any late restoration
                                     Thread.Sleep(500);
-                                    ApplyRuleToWindow(process.MainWindowHandle, rule);
+                                    _windowRuleApplier.Apply(process.MainWindowHandle, rule);
                                 }, token);
                             }
                             else
                             {
-                                ApplyRuleToWindow(process.MainWindowHandle, rule);
+                                _windowRuleApplier.Apply(process.MainWindowHandle, rule);
                             }
                         }
                         else if (rule.OnTop.HasValue && isVisible)
@@ -383,10 +399,7 @@ public sealed class WindowControlService : IDisposable
                             // This ensures OnTop settings persist when windows are shown again
                             Debug.WriteLine(
                                 $"Applying OnTop outside timer for {process.ProcessName}: {rule.OnTop.Value}");
-                            var result = SetWindowPos(process.MainWindowHandle,
-                                rule.OnTop.Value ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-                            Debug.WriteLine($"SetWindowPos OnTop for {process.ProcessName}: Result={result}");
+                            _windowRuleApplier.ApplyTopMostOnly(process.MainWindowHandle, rule);
                         }
 
                         appliedForPid.Add(process.Id);
@@ -414,221 +427,32 @@ public sealed class WindowControlService : IDisposable
 
     public void SimulateAppJustOpenedForAll()
     {
-        // Reset first-seen timestamps so next monitor cycles treat all as newly opened
-        _firstSeenByPid.Clear();
-        _lastVisibilityByPid.Clear();
-        _lastMinimizedByPid.Clear();
-        _lastWindowHandleByPid.Clear();
+        lock (_stateLock)
+        {
+            _firstSeenByPid.Clear();
+            _lastVisibilityByPid.Clear();
+            _lastMinimizedByPid.Clear();
+            _lastWindowHandleByPid.Clear();
+            _suppressedWhileMinimizedByPid.Clear();
+        }
     }
 
-    private static void ApplyRuleToWindow(nint hWnd, WindowRule rule)
+    private static bool ShouldApplyToTitle(WindowRule rule, string? title)
     {
-        Debug.WriteLine(
-            $"ApplyRuleToWindow called for {rule.ProcessName}: X={rule.X}, Y={rule.Y}, Width={rule.Width}, Height={rule.Height}");
+        var effectiveTitle = title ?? string.Empty;
 
-        // Get current window rect before applying
-        if (GetWindowRect(hWnd, out var rectBefore))
+        if (rule.ExcludeTitlePatterns.Any(pattern =>
+                effectiveTitle.Contains(pattern, StringComparison.InvariantCultureIgnoreCase)))
         {
-            Debug.WriteLine(
-                $"Window rect BEFORE: Left={rectBefore.Left}, Top={rectBefore.Top}, Right={rectBefore.Right}, Bottom={rectBefore.Bottom}, Width={rectBefore.Right - rectBefore.Left}, Height={rectBefore.Bottom - rectBefore.Top}");
+            return false;
         }
 
-        // Get and log current window placement to see what the app thinks the normal size should be
-        var currentPlacement = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
-        if (GetWindowPlacement(hWnd, ref currentPlacement))
+        if (string.IsNullOrWhiteSpace(rule.MatchTitleContains))
         {
-            var normalWidth = currentPlacement.rcNormalPosition.Right - currentPlacement.rcNormalPosition.Left;
-            var normalHeight = currentPlacement.rcNormalPosition.Bottom - currentPlacement.rcNormalPosition.Top;
-            Debug.WriteLine(
-                $"Current window placement: showCmd={currentPlacement.showCmd}, NormalSize={normalWidth}x{normalHeight}, NormalPos=({currentPlacement.rcNormalPosition.Left},{currentPlacement.rcNormalPosition.Top})");
+            return true;
         }
 
-        // Get and log window style flags
-        var styleBefore = GetWindowLong(hWnd, GWL_STYLE);
-        var exStyleBefore = GetWindowLong(hWnd, GWL_EXSTYLE);
-        Debug.WriteLine($"Window style BEFORE: Style=0x{styleBefore:X8}, ExStyle=0x{exStyleBefore:X8}");
-        Debug.WriteLine(
-            $"  WS_THICKFRAME: {(styleBefore & WS_THICKFRAME) != 0}, WS_SIZEBOX: {(styleBefore & WS_SIZEBOX) != 0}, WS_MAXIMIZEBOX: {(styleBefore & WS_MAXIMIZEBOX) != 0}, WS_MINIMIZEBOX: {(styleBefore & WS_MINIMIZEBOX) != 0}");
-
-        // CRITICAL: Set window flags BEFORE trying to resize
-        // The app may be enforcing size constraints based on window style flags
-        // We need to ensure the window has all necessary flags for unrestricted resizing
-        var needsStyleUpdate = false;
-        var newStyle = styleBefore;
-
-        // Ensure WS_THICKFRAME (required for resizing)
-        if ((styleBefore & WS_THICKFRAME) == 0)
-        {
-            Debug.WriteLine("Window missing WS_THICKFRAME! Adding it...");
-            newStyle |= WS_THICKFRAME;
-            needsStyleUpdate = true;
-        }
-
-        // Ensure WS_MAXIMIZEBOX (may be related to size constraints)
-        if ((styleBefore & WS_MAXIMIZEBOX) == 0)
-        {
-            Debug.WriteLine("Window missing WS_MAXIMIZEBOX! Adding it (may help with size constraints)...");
-            newStyle |= WS_MAXIMIZEBOX;
-            needsStyleUpdate = true;
-        }
-
-        // Apply style changes BEFORE any window operations
-        if (needsStyleUpdate)
-        {
-            Debug.WriteLine($"Applying style changes BEFORE resize: 0x{styleBefore:X8} -> 0x{newStyle:X8}");
-            SetWindowLong(hWnd, GWL_STYLE, newStyle);
-            // Force window to recalculate its non-client area immediately
-            SetWindowPos(hWnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-            Thread.Sleep(100); // Give window time to process style change
-        }
-
-        // Set the placement FIRST, before restoring the window
-        // This way the app will restore to our desired size instead of its stored size
-        var targetPlacement = new WINDOWPLACEMENT
-        {
-            length = Marshal.SizeOf<WINDOWPLACEMENT>(),
-            flags = 0,
-            showCmd = SW_SHOWNORMAL,
-            rcNormalPosition = new RECT
-            {
-                Left = rule.X,
-                Top = rule.Y,
-                Right = rule.X + rule.Width,
-                Bottom = rule.Y + rule.Height
-            }
-        };
-
-        // Set placement BEFORE restoring - this is critical!
-        var placementResult = SetWindowPlacement(hWnd, ref targetPlacement);
-        Debug.WriteLine(
-            $"SetWindowPlacement (BEFORE restore) result: {placementResult}, Applied: X={rule.X}, Y={rule.Y}, Width={rule.Width}, Height={rule.Height}");
-        Thread.Sleep(100);
-
-        // Now restore the window - it should use our placement
-        var restoreResult = ShowWindow(hWnd, SW_RESTORE);
-        Debug.WriteLine($"ShowWindow(SW_RESTORE) result: {restoreResult}");
-        Thread.Sleep(100);
-
-        // Verify style after restore
-        var styleAfterRestore = GetWindowLong(hWnd, GWL_STYLE);
-        Debug.WriteLine($"Window style AFTER RESTORE: Style=0x{styleAfterRestore:X8}");
-        Debug.WriteLine(
-            $"  WS_THICKFRAME: {(styleAfterRestore & WS_THICKFRAME) != 0}, WS_SIZEBOX: {(styleAfterRestore & WS_SIZEBOX) != 0}, WS_MAXIMIZEBOX: {(styleAfterRestore & WS_MAXIMIZEBOX) != 0}");
-
-        // If flags were removed, restore them immediately
-        if ((styleAfterRestore & WS_THICKFRAME) == 0 || (styleAfterRestore & WS_MAXIMIZEBOX) == 0)
-        {
-            Debug.WriteLine("Window flags were removed after restore! Re-adding them...");
-            var restoredStyle = styleAfterRestore;
-            if ((styleAfterRestore & WS_THICKFRAME) == 0) restoredStyle |= WS_THICKFRAME;
-            if ((styleAfterRestore & WS_MAXIMIZEBOX) == 0) restoredStyle |= WS_MAXIMIZEBOX;
-            SetWindowLong(hWnd, GWL_STYLE, restoredStyle);
-            SetWindowPos(hWnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-            Thread.Sleep(100);
-        }
-
-        // Check placement after restore
-        var placementAfter = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
-        if (GetWindowPlacement(hWnd, ref placementAfter))
-        {
-            var afterWidth = placementAfter.rcNormalPosition.Right - placementAfter.rcNormalPosition.Left;
-            var afterHeight = placementAfter.rcNormalPosition.Bottom - placementAfter.rcNormalPosition.Top;
-            Debug.WriteLine($"Window placement AFTER RESTORE: NormalSize={afterWidth}x{afterHeight}");
-            if (afterWidth != rule.Width || afterHeight != rule.Height)
-            {
-                Debug.WriteLine(
-                    $"WARNING: App changed placement! Expected {rule.Width}x{rule.Height}, got {afterWidth}x{afterHeight}");
-                // Try setting placement one more time after restore
-                SetWindowPlacement(hWnd, ref targetPlacement);
-                Thread.Sleep(100);
-            }
-        }
-
-        // Try multiple approaches to ensure the size is set correctly
-        // Some applications resist resizing, so we need to be persistent
-
-        // Approach 1: SetWindowPos
-        var setPosResult = SetWindowPos(hWnd, IntPtr.Zero, rule.X, rule.Y, rule.Width, rule.Height,
-            SWP_SHOWWINDOW | SWP_NOZORDER);
-        Debug.WriteLine($"SetWindowPos (1st attempt) result: {setPosResult}");
-
-        Thread.Sleep(50);
-
-        // Approach 2: MoveWindow
-        var moveResult = MoveWindow(hWnd, rule.X, rule.Y, rule.Width, rule.Height, true);
-        Debug.WriteLine($"MoveWindow (1st attempt) result: {moveResult}");
-
-        Thread.Sleep(100);
-
-        // Verify and retry if needed
-        var retryCount = 0;
-        const int maxRetries = 5;
-        while (retryCount < maxRetries)
-        {
-            if (GetWindowRect(hWnd, out var rectCurrent))
-            {
-                var actualWidth = rectCurrent.Right - rectCurrent.Left;
-                var actualHeight = rectCurrent.Bottom - rectCurrent.Top;
-
-                if (retryCount == 0)
-                {
-                    Debug.WriteLine($"Window rect AFTER initial attempt: Width={actualWidth}, Height={actualHeight}");
-                }
-
-                // Check if size matches (allow 1 pixel tolerance for rounding)
-                if (Math.Abs(actualWidth - rule.Width) <= 1 && Math.Abs(actualHeight - rule.Height) <= 1)
-                {
-                    Debug.WriteLine($"Size matches! Width={actualWidth}, Height={actualHeight}");
-                    break;
-                }
-
-                retryCount++;
-                Debug.WriteLine(
-                    $"Size mismatch (attempt {retryCount}/{maxRetries})! Expected: {rule.Width}x{rule.Height}, Actual: {actualWidth}x{actualHeight}. Retrying...");
-
-                // Use SetWindowPos with different flags for more forceful resize
-                SetWindowPos(hWnd, IntPtr.Zero, rule.X, rule.Y, rule.Width, rule.Height,
-                    SWP_SHOWWINDOW | SWP_NOZORDER);
-
-                Thread.Sleep(50);
-
-                // Also try MoveWindow
-                MoveWindow(hWnd, rule.X, rule.Y, rule.Width, rule.Height, true);
-
-                // Send WM_SIZE message to force the window to process the size change
-                var lParam = (nint)((rule.Height << 16) | (rule.Width & 0xFFFF));
-                SendMessage(hWnd, WM_SIZE, (nint)SIZE_RESTORED, lParam);
-
-                // Longer delay for later retries
-                Thread.Sleep(100 + (retryCount * 50));
-            }
-            else
-            {
-                break;
-            }
-        }
-
-        // Final verification
-        if (GetWindowRect(hWnd, out var rectFinal))
-        {
-            var finalWidth = rectFinal.Right - rectFinal.Left;
-            var finalHeight = rectFinal.Bottom - rectFinal.Top;
-            Debug.WriteLine($"Window rect FINAL: Width={finalWidth}, Height={finalHeight}");
-
-            if (Math.Abs(finalWidth - rule.Width) > 1 || Math.Abs(finalHeight - rule.Height) > 1)
-            {
-                Debug.WriteLine(
-                    $"WARNING: Final size still doesn't match! Expected: {rule.Width}x{rule.Height}, Got: {finalWidth}x{finalHeight}");
-            }
-        }
-
-        // Control OnTop property
-        if (rule.OnTop.HasValue)
-        {
-            var result = SetWindowPos(hWnd, rule.OnTop.Value ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            Debug.WriteLine($"SetWindowPos for {rule.ProcessName}: OnTop={rule.OnTop.Value}, Result={result}");
-        }
+        return effectiveTitle.Contains(rule.MatchTitleContains, StringComparison.InvariantCultureIgnoreCase);
     }
 
     private static WindowRulesConfig LoadConfigInternal(string path)
@@ -665,24 +489,6 @@ public sealed class WindowControlService : IDisposable
     }
 
     [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool MoveWindow(nint hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool ShowWindow(nint hWnd, int nCmdShow);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern nint SendMessage(nint hWnd, uint Msg, nint wParam, nint lParam);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool GetWindowPlacement(nint hWnd, ref WINDOWPLACEMENT lpwndpl);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool SetWindowPlacement(nint hWnd, ref WINDOWPLACEMENT lpwndpl);
-
-    [DllImport("user32.dll", SetLastError = true)]
     private static extern bool IsWindowVisible(nint hWnd);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -690,15 +496,6 @@ public sealed class WindowControlService : IDisposable
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int GetWindowLong(nint hWnd, int nIndex);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern int SetWindowLong(nint hWnd, int nIndex, int dwNewLong);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern int GetWindowLongPtr(nint hWnd, int nIndex);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern int SetWindowLongPtr(nint hWnd, int nIndex, int dwNewLong);
 
     private static bool IsPopupWindow(nint hWnd)
     {
@@ -764,24 +561,6 @@ public sealed class WindowControlService : IDisposable
     private static extern nint GetWindow(nint hWnd, uint uCmd);
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct WINDOWPLACEMENT
-    {
-        public int length;
-        public int flags;
-        public int showCmd;
-        public POINT ptMinPosition;
-        public POINT ptMaxPosition;
-        public RECT rcNormalPosition;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int X;
-        public int Y;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
     private struct RECT
     {
         public int Left;
@@ -798,6 +577,19 @@ public sealed class WindowControlService : IDisposable
         public int ControlDurationMs { get; set; } = 5000;
         public bool ApplyAllOnStartup { get; set; }
         public bool StartInTray { get; set; }
+
+        public WindowRulesConfig Clone()
+        {
+            return new WindowRulesConfig
+            {
+                Rules = Rules.Select(static rule => rule.Clone()).ToList(),
+                PollIntervalMs = PollIntervalMs,
+                ApplyOnLaunchOnly = ApplyOnLaunchOnly,
+                ControlDurationMs = ControlDurationMs,
+                ApplyAllOnStartup = ApplyAllOnStartup,
+                StartInTray = StartInTray
+            };
+        }
     }
 
     public sealed class WindowRule
@@ -810,22 +602,42 @@ public sealed class WindowControlService : IDisposable
         public string? MatchTitleContains { get; set; } // Include only windows with title containing this
         public string? ExcludeTitleContains { get; set; } // Exclude windows with title containing this
         [JsonIgnore]
-        private string[] _excludeTitles;
+        private string[]? _excludeTitlePatterns;
         [JsonIgnore]
-        public string[] ExcludeTitles
+        public IReadOnlyList<string> ExcludeTitlePatterns
         {
             get
             {
-                if (_excludeTitles == null)
+                if (_excludeTitlePatterns == null)
                 {
-                    _excludeTitles = ExcludeTitleContains?.Split(';');
+                    _excludeTitlePatterns = string.IsNullOrWhiteSpace(ExcludeTitleContains)
+                        ? Array.Empty<string>()
+                        : ExcludeTitleContains
+                            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 }
 
-                return _excludeTitles;
+                return _excludeTitlePatterns;
             }
         }
         public bool Enabled { get; set; } = true;
         public bool ApplyOnStartup { get; set; } = true;
         public bool? OnTop { get; set; } = null; // null = don't change, true = set on top, false = remove from top
+
+        public WindowRule Clone()
+        {
+            return new WindowRule
+            {
+                ProcessName = ProcessName,
+                X = X,
+                Y = Y,
+                Width = Width,
+                Height = Height,
+                MatchTitleContains = MatchTitleContains,
+                ExcludeTitleContains = ExcludeTitleContains,
+                Enabled = Enabled,
+                ApplyOnStartup = ApplyOnStartup,
+                OnTop = OnTop
+            };
+        }
     }
 }

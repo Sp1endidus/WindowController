@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly WindowControlService _service;
     private readonly ObservableCollection<WindowRule> _rules = new();
     private TaskbarIcon? _trayIcon;
+    private bool _isExitRequested;
 
     public MainWindow()
     {
@@ -25,7 +26,6 @@ public partial class MainWindow : Window
         ConfigPathText.Text = configPath;
         _service = new WindowControlService(configPath);
         _service.Start();
-        // Apply on startup according to config
         var cfg = _service.GetConfig();
         ApplyAllOnStartupInput.IsChecked = cfg.ApplyAllOnStartup;
         StartInTrayInput.IsChecked = cfg.StartInTray;
@@ -40,19 +40,26 @@ public partial class MainWindow : Window
         SetupTray();
         if (cfg.StartInTray)
         {
-            this.Hide();
+            Hide();
         }
         
-        // Intercept close event to hide to tray instead
-        this.Closing += MainWindow_Closing;
+        Closing += MainWindow_Closing;
+        Closed += MainWindow_Closed;
     }
     
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        // Cancel the close event
+        if (_isExitRequested)
+            return;
+
         e.Cancel = true;
-        // Hide to tray instead
-        this.Hide();
+        Hide();
+    }
+
+    private void MainWindow_Closed(object? sender, EventArgs e)
+    {
+        _service.Dispose();
+        DisposeTrayIcon();
     }
 
     private void ReloadButton_Click(object sender, RoutedEventArgs e)
@@ -73,12 +80,10 @@ public partial class MainWindow : Window
     private async void PickWindowButton_Click(object sender, RoutedEventArgs e)
     {
         var thisProcId = Environment.ProcessId;
-        var window = Window.GetWindow(this);
-        var oldState = this.WindowState;
+        var oldState = WindowState;
         try
         {
-            // Minimize own window to avoid selecting self
-            this.WindowState = WindowState.Minimized;
+            WindowState = WindowState.Minimized;
             StatusText.Text = "Click a window to capture...";
             var picked = await WindowPicker.PickOnNextClickAsync(TimeSpan.FromSeconds(8), thisProcId);
             if (picked != null)
@@ -98,8 +103,8 @@ public partial class MainWindow : Window
         }
         finally
         {
-            this.WindowState = oldState;
-            this.Activate();
+            WindowState = oldState;
+            Activate();
         }
     }
 
@@ -109,13 +114,6 @@ public partial class MainWindow : Window
         config.Rules = _rules.ToList();
         config.ApplyAllOnStartup = ApplyAllOnStartupInput.IsChecked == true;
         config.StartInTray = StartInTrayInput.IsChecked == true;
-        
-        // Debug: Log OnTop values
-        foreach (var rule in config.Rules)
-        {
-            System.Diagnostics.Debug.WriteLine($"Saving rule {rule.ProcessName}: OnTop={rule.OnTop}");
-        }
-        
         _service.Save(config);
         StatusText.Text = "Rules saved";
         UpdateButtonsEnabled();
@@ -143,7 +141,14 @@ public partial class MainWindow : Window
         var existing = _rules.FirstOrDefault(r => string.Equals(r.ProcessName, process, StringComparison.InvariantCultureIgnoreCase) && string.Equals(r.MatchTitleContains ?? string.Empty, title, StringComparison.InvariantCultureIgnoreCase));
         if (existing != null)
         {
-            existing.X = x; existing.Y = y; existing.Width = w; existing.Height = h; existing.Enabled = true; existing.OnTop = onTopValue; existing.ExcludeTitleContains = string.IsNullOrEmpty(excludeTitle) ? null : excludeTitle;
+            existing.X = x;
+            existing.Y = y;
+            existing.Width = w;
+            existing.Height = h;
+            existing.Enabled = true;
+            existing.MatchTitleContains = string.IsNullOrEmpty(title) ? null : title;
+            existing.ExcludeTitleContains = string.IsNullOrEmpty(excludeTitle) ? null : excludeTitle;
+            existing.OnTop = onTopValue;
             RulesGrid.Items.Refresh();
             StatusText.Text = "Rule updated";
         }
@@ -332,7 +337,7 @@ public partial class MainWindow : Window
         var contextMenu = new System.Windows.Controls.ContextMenu();
         
         var showItem = new System.Windows.Controls.MenuItem { Header = "Show" };
-        showItem.Click += (_, __) => { this.Show(); this.WindowState = WindowState.Normal; this.Activate(); };
+        showItem.Click += (_, __) => ShowFromTray();
         contextMenu.Items.Add(showItem);
         
         var applyItem = new System.Windows.Controls.MenuItem { Header = "Apply Now (5s)" };
@@ -342,15 +347,38 @@ public partial class MainWindow : Window
         contextMenu.Items.Add(new System.Windows.Controls.Separator());
         
         var exitItem = new System.Windows.Controls.MenuItem { Header = "Exit" };
-        exitItem.Click += (_, __) => { _trayIcon.Visibility = System.Windows.Visibility.Collapsed; _trayIcon.Dispose(); _trayIcon = null; System.Windows.Application.Current.Shutdown(); };
+        exitItem.Click += (_, __) => ExitApplication();
         contextMenu.Items.Add(exitItem);
         
         _trayIcon.ContextMenu = contextMenu;
-        _trayIcon.TrayLeftMouseUp += (_, __) => { this.Show(); this.WindowState = WindowState.Normal; this.Activate(); };
+        _trayIcon.TrayLeftMouseUp += (_, __) => ShowFromTray();
     }
 
     private void HideToTrayButton_Click(object sender, RoutedEventArgs e)
     {
-        this.Hide();
+        Hide();
+    }
+
+    private void ShowFromTray()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void ExitApplication()
+    {
+        _isExitRequested = true;
+        Close();
+    }
+
+    private void DisposeTrayIcon()
+    {
+        if (_trayIcon == null)
+            return;
+
+        _trayIcon.Visibility = Visibility.Collapsed;
+        _trayIcon.Dispose();
+        _trayIcon = null;
     }
 }
