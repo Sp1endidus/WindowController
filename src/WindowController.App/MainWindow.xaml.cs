@@ -45,6 +45,7 @@ public partial class MainWindow : Window
         
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
+        StateChanged += MainWindow_StateChanged;
     }
     
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -60,6 +61,17 @@ public partial class MainWindow : Window
     {
         _service.Dispose();
         DisposeTrayIcon();
+    }
+
+    private void MainWindow_StateChanged(object? sender, EventArgs e)
+    {
+        if (_isExitRequested)
+            return;
+
+        if (WindowState == WindowState.Minimized)
+        {
+            Hide();
+        }
     }
 
     private void ReloadButton_Click(object sender, RoutedEventArgs e)
